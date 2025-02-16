@@ -45,7 +45,11 @@ def calculate_api(df):
                 break
     total_weighted_score = sum(category_counts[cat] * weight for cat, (_, _, weight) in categories.items())
     total_students = len(df)
-    return (total_weighted_score / total_students) * 100 if total_students > 0 else 0
+    
+    # Create detailed division breakdown
+    division_df = pd.DataFrame(list(category_counts.items()), columns=['Division', 'No. of Students'])
+    
+    return (total_weighted_score / total_students) * 100 if total_students > 0 else 0, division_df
 
 def categorize_students(df):
     student_avg = df.groupby('Name')['Percentage'].mean().reset_index()
@@ -90,8 +94,10 @@ if uploaded_files:
 
     if df is not None:
         if option == "Simple API Calculation":
-            api_score = calculate_api(df)
+            api_score, division_df = calculate_api(df)
             st.write(f"### 📊 API Score: {api_score:.2f}")
+            st.write("### 📊 Division Breakdown")
+            st.dataframe(division_df)  # Display division breakdown with student counts
         else:
             categorized_df = categorize_students(df)
             final_df = generate_feedback(categorized_df)
