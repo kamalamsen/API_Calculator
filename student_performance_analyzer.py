@@ -1,6 +1,7 @@
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
+from io import BytesIO
 
 def process_multiple_files(uploaded_files):
     all_data = []
@@ -15,12 +16,14 @@ def process_multiple_files(uploaded_files):
         
         # Identify mark columns
         mark_columns = [col for col in df.columns if col != 'Name']
+        max_marks = st.number_input("Enter Total Marks for Class Test", min_value=1, step=1, value=100)
+        
         if len(mark_columns) == 1:
             df['Total Marks'] = df[mark_columns[0]]  # Use single column directly
         else:
             df['Total Marks'] = df[mark_columns].sum(axis=1)  # Sum if multiple columns exist
         
-        df['Percentage'] = (df['Total Marks'] / df['Total Marks'].max()) * 100
+        df['Percentage'] = (df['Total Marks'] / max_marks) * 100
         df['Assessment'] = file.name  # Add assessment name
         all_data.append(df[['Name', 'Percentage', 'Assessment']])
 
@@ -46,7 +49,6 @@ def calculate_api(df):
     total_weighted_score = sum(category_counts[cat] * weight for cat, (_, _, weight) in categories.items())
     total_students = len(df)
     
-    # Create detailed division breakdown
     division_df = pd.DataFrame(list(category_counts.items()), columns=['Division', 'No. of Students'])
     
     return (total_weighted_score / total_students) * 100 if total_students > 0 else 0, division_df
@@ -62,11 +64,11 @@ def categorize_students(df):
 
 def generate_feedback(df):
     feedback = {
-        "High Achiever": "Excellent performance! Keep it up! 🎉",
-        "Scope to Become High Achiever": "You're close to excellence, push a little more! 🚀",
-        "Average": "Good effort! Keep practicing to reach the top. 📈",
-        "Scope to Become Average": "You're improving! Keep working hard! 💪",
-        "Remedial": "Need focused improvement. Seek additional support. 📚"
+        "High Achiever": "Excellent performance! Keep it up!",
+        "Scope to Become High Achiever": "You're close to excellence, push a little more!",
+        "Average": "Good effort! Keep practicing to reach the top.",
+        "Scope to Become Average": "You're improving! Keep working hard!",
+        "Remedial": "Need focused improvement. Seek additional support."
     }
     df['Feedback'] = df['Category'].map(feedback)
     return df
@@ -84,8 +86,15 @@ def plot_student_progress(df):
     plt.grid(True, linestyle='--', alpha=0.7)
     st.pyplot(plt)
 
+def download_report(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name="Analysis Report", index=False)
+    output.seek(0)
+    return output
+
 st.title("📊 Student Performance Analysis")
-option = st.radio("Choose Analysis Type:", ("Simple API Calculation", "Comparative Analysis"))
+option = st.radio("Choose Analysis Type:", ("Simple API Calculation", "Comparative Analysis", "Class Test Analysis"))
 
 uploaded_files = st.file_uploader("Upload Excel files", type=["xlsx"], accept_multiple_files=True)
 
@@ -97,14 +106,18 @@ if uploaded_files:
             api_score, division_df = calculate_api(df)
             st.write(f"### 📊 API Score: {api_score:.2f}")
             st.write("### 📊 Division Breakdown")
-            st.dataframe(division_df)  # Display division breakdown with student counts
+            st.dataframe(division_df)
+        elif option == "Class Test Analysis":
+            st.write("### 📊 Class Test Analysis")
+            categorized_df = categorize_students(df)
+            final_df = generate_feedback(categorized_df)
+            st.dataframe(final_df)
         else:
             categorized_df = categorize_students(df)
             final_df = generate_feedback(categorized_df)
             st.write("### 🏆 Student Performance Report")
             st.dataframe(final_df)
             
-            # Detailed category-wise table
             st.write("### 📊 Detailed Student Categorization")
             for category in final_df['Category'].unique():
                 st.write(f"#### {category}")
@@ -112,3 +125,7 @@ if uploaded_files:
             
             st.write("### 📈 Student Progress Visualization")
             plot_student_progress(df)
+
+        # Download option
+        report_file = download_report(df)
+        st.download_button(label="📥 Download Full Analysis Report", data=report_file, file_name="Student_Performance_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
