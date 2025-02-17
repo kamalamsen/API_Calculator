@@ -1,35 +1,15 @@
 import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
-from io import BytesIO
 
-def process_multiple_files(uploaded_files):
-    all_data = []
-    
-    for file in uploaded_files:
-        df = pd.read_excel(file)
-        
-        # Check for required columns
-        if 'Name' not in df.columns:
-            st.error(f"Error: {file.name} does not contain a 'Name' column.")
-            return None
-        
-        # Identify mark columns
-        mark_columns = [col for col in df.columns if col != 'Name']
-        max_marks = st.number_input("Enter Total Marks for Class Test", min_value=1, step=1, value=100)
-        
-        if len(mark_columns) == 1:
-            df['Total Marks'] = df[mark_columns[0]]  # Use single column directly
-        else:
-            df['Total Marks'] = df[mark_columns].sum(axis=1)  # Sum if multiple columns exist
-        
-        df['Percentage'] = (df['Total Marks'] / max_marks) * 100
-        df['Assessment'] = file.name  # Add assessment name
-        all_data.append(df[['Name', 'Percentage', 'Assessment']])
+def calculate_api(file):
+    df = pd.read_excel(file)
 
-    return pd.concat(all_data)  # Combine all data
+    # Check if required columns exist
+    if not {'Name', 'Marks'}.issubset(df.columns):
+        st.error("Excel file must contain 'Name' and 'Marks' columns.")
+        return
 
-def calculate_api(df):
+    # Define categories and weightage
     categories = {
         '>95': (95, 100, 10),
         '90-94.99': (90, 94.99, 8),
@@ -40,92 +20,80 @@ def calculate_api(df):
         '33-49.99': (33, 49.99, -1),
         '<33': (0, 32.99, -3),
     }
+
+    # Count students in each category
     category_counts = {key: 0 for key in categories}
-    for mark in df['Percentage']:
+    category_students = {key: [] for key in categories}
+    
+    for _, row in df.iterrows():
+        mark = row['Marks']
         for category, (low, high, weight) in categories.items():
             if low <= mark <= high:
                 category_counts[category] += 1
+                category_students[category].append(row['Name'])
                 break
+
+    # Calculate API score
     total_weighted_score = sum(category_counts[cat] * weight for cat, (_, _, weight) in categories.items())
     total_students = len(df)
-    
-    division_df = pd.DataFrame(list(category_counts.items()), columns=['Division', 'No. of Students'])
-    
-    return (total_weighted_score / total_students) * 100 if total_students > 0 else 0, division_df
 
-def categorize_students(df):
-    student_avg = df.groupby('Name')['Percentage'].mean().reset_index()
-    student_avg['Category'] = pd.cut(
-        student_avg['Percentage'],
+    if total_students == 0:
+        st.error("No students found in the data.")
+        return
+
+    api_score = (total_weighted_score / total_students) * 100
+
+    # Display results
+    st.write("### API Calculation Results")
+    st.write("Number of students in each category:")
+    breakdown_df = pd.DataFrame({'Category': category_counts.keys(), 'Count': category_counts.values()})
+    st.dataframe(breakdown_df)
+    st.write(f"### API Score: {api_score:.2f}")
+
+    # Display students categorized by division
+    st.write("### Students Categorized by Division")
+    for category, students in category_students.items():
+        st.write(f"#### {category} ({len(students)} students)")
+        st.write(", ".join(students) if students else "No students in this category")
+
+def compare_assessments(files):
+    all_data = []
+    
+    for file in files:
+        df = pd.read_excel(file)
+        if not {'Name', 'Marks'}.issubset(df.columns):
+            st.error(f"Excel file {file.name} must contain 'Name' and 'Marks' columns.")
+            return None
+        df['Assessment'] = file.name  # Store assessment name
+        all_data.append(df[['Name', 'Marks', 'Assessment']])
+    
+    if not all_data:
+        return None
+    
+    df_combined = pd.concat(all_data)
+    df_avg = df_combined.groupby('Name')['Marks'].mean().reset_index()
+    df_avg['Category'] = pd.cut(
+        df_avg['Marks'],
         bins=[0, 49.99, 59.99, 69.99, 79.99, 100],
         labels=["Remedial", "Scope to Become Average", "Average", "Scope to Become High Achiever", "High Achiever"]
     )
-    return student_avg
+    return df_avg
 
-def generate_feedback(df):
-    feedback = {
-        "High Achiever": "Excellent performance! Keep it up!",
-        "Scope to Become High Achiever": "You're close to excellence, push a little more!",
-        "Average": "Good effort! Keep practicing to reach the top.",
-        "Scope to Become Average": "You're improving! Keep working hard!",
-        "Remedial": "Need focused improvement. Seek additional support."
-    }
-    df['Feedback'] = df['Category'].map(feedback)
-    return df
+# Streamlit UI
+st.title("API Calculator and Comparative Analysis")
+option = st.radio("Choose Analysis Type:", ("Simple API Calculation", "Comparative Analysis"))
 
-def plot_student_progress(df):
-    plt.figure(figsize=(12, 6))
-    for name, group in df.groupby('Name'):
-        plt.plot(group['Assessment'], group['Percentage'], marker='o', label=name, linestyle='-', linewidth=2)
-    plt.xlabel("Assessment", fontsize=12)
-    plt.ylabel("Percentage", fontsize=12)
-    plt.title("Student Progress Over Assessments", fontsize=14, fontweight='bold')
-    plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
-    plt.xticks(rotation=45, fontsize=10)
-    plt.yticks(fontsize=10)
-    plt.grid(True, linestyle='--', alpha=0.7)
-    st.pyplot(plt)
-
-def download_report(df):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, sheet_name="Analysis Report", index=False)
-    output.seek(0)
-    return output
-
-st.title("📊 Student Performance Analysis")
-option = st.radio("Choose Analysis Type:", ("Simple API Calculation", "Comparative Analysis", "Class Test Analysis"))
-
-uploaded_files = st.file_uploader("Upload Excel files", type=["xlsx"], accept_multiple_files=True)
-
-if uploaded_files:
-    df = process_multiple_files(uploaded_files)
-
-    if df is not None:
-        if option == "Simple API Calculation":
-            api_score, division_df = calculate_api(df)
-            st.write(f"### 📊 API Score: {api_score:.2f}")
-            st.write("### 📊 Division Breakdown")
-            st.dataframe(division_df)
-        elif option == "Class Test Analysis":
-            st.write("### 📊 Class Test Analysis")
-            categorized_df = categorize_students(df)
-            final_df = generate_feedback(categorized_df)
-            st.dataframe(final_df)
-        else:
-            categorized_df = categorize_students(df)
-            final_df = generate_feedback(categorized_df)
-            st.write("### 🏆 Student Performance Report")
-            st.dataframe(final_df)
-            
-            st.write("### 📊 Detailed Student Categorization")
-            for category in final_df['Category'].unique():
-                st.write(f"#### {category}")
-                st.dataframe(final_df[final_df['Category'] == category][['Name', 'Percentage', 'Feedback']])
-            
-            st.write("### 📈 Student Progress Visualization")
-            plot_student_progress(df)
-
-        # Download option
-        report_file = download_report(df)
-        st.download_button(label="📥 Download Full Analysis Report", data=report_file, file_name="Student_Performance_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+if option == "Simple API Calculation":
+    uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx"])
+    if uploaded_file:
+        calculate_api(uploaded_file)
+else:
+    uploaded_files = st.file_uploader("Upload Multiple Assessment Files", type=["xlsx"], accept_multiple_files=True)
+    if uploaded_files:
+        comparison_df = compare_assessments(uploaded_files)
+        if comparison_df is not None:
+            st.write("### Comparative Assessment Report")
+            st.dataframe(comparison_df)
+            # Allow download of the report
+            csv = comparison_df.to_csv(index=False).encode('utf-8')
+            st.download_button("Download Report", csv, "comparative_analysis_report.csv", "text/csv")
