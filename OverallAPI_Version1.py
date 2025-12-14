@@ -137,7 +137,9 @@ def calculate_single_subject_api(file):
     edited = st.data_editor(df[['name', 'teacher remark']], num_rows='dynamic')
     df.update(edited)
 
-    div_df = df['division'].value_counts().reset_index()
+    # Create division-wise count in fixed order
+    division_order = ['>95', '90-94.99', '80-89.99', '70-79.99', '60-69.99', '50-59.99', '33-49.99', '<33']
+    div_df = df['division'].value_counts().reindex(division_order, fill_value=0).reset_index()
     div_df.columns = ['Division', 'Count']
 
     cat_df = df['performance category'].value_counts().reset_index()
@@ -196,7 +198,9 @@ def calculate_five_subject_api(file):
     st.subheader('Five Subject API Result')
     st.write(f'Class API Score: {api_score:.2f}')
 
-    div_df = df['division'].value_counts().reset_index()
+    # Create division-wise count in fixed order
+    division_order = ['>95', '90-94.99', '80-89.99', '70-79.99', '60-69.99', '50-59.99', '33-49.99', '<33']
+    div_df = df['division'].value_counts().reindex(division_order, fill_value=0).reset_index()
     div_df.columns = ['Division', 'Count']
 
     cat_df = df['performance category'].value_counts().reset_index()
