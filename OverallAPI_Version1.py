@@ -142,7 +142,9 @@ def calculate_single_subject_api(file):
     div_df = df['division'].value_counts().reindex(division_order, fill_value=0).reset_index()
     div_df.columns = ['Division', 'Count']
 
-    cat_df = df['performance category'].value_counts().reset_index()
+    # Create performance category count in fixed order
+    category_order = ['High Achiever', 'Average', 'Needs Improvement', 'Remedial', 'Critical']
+    cat_df = df['performance category'].value_counts().reindex(category_order, fill_value=0).reset_index()
     cat_df.columns = ['Category', 'Count']
 
     st.subheader('Division-wise Distribution')
@@ -203,7 +205,9 @@ def calculate_five_subject_api(file):
     div_df = df['division'].value_counts().reindex(division_order, fill_value=0).reset_index()
     div_df.columns = ['Division', 'Count']
 
-    cat_df = df['performance category'].value_counts().reset_index()
+    # Create performance category count in fixed order
+    category_order = ['High Achiever', 'Average', 'Needs Improvement', 'Remedial', 'Critical']
+    cat_df = df['performance category'].value_counts().reindex(category_order, fill_value=0).reset_index()
     cat_df.columns = ['Category', 'Count']
 
     st.subheader('Division-wise Distribution')
