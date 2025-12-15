@@ -1,8 +1,9 @@
 import pandas as pd
 import streamlit as st
 from io import BytesIO
+import time
 
-# -------------------- PAGE CONFIG --------------------
+# -------------------- PAGE CONFIG (FIRST COMMAND) --------------------
 st.set_page_config(
     page_title="Teacher's API Calculator",
     page_icon="📊",
@@ -10,13 +11,15 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# -------------------- COMMON UTILITIES --------------------
-def normalize_headers(df):
-    df.columns = df.columns.str.strip().str.lower()
-    return df
+# Cache expensive operations
+@st.cache_data
+def load_excel_data(file):
+    """Cache the Excel file loading"""
+    return pd.read_excel(file)
 
-# -------------------- API LOGIC (COMMON) --------------------
-def calculate_api_from_percentage(percentages):
+@st.cache_data
+def calculate_api_cached(percentages):
+    """Cache API calculation"""
     categories = [
         (95, 100, 10),
         (90, 94.99, 8),
@@ -36,6 +39,10 @@ def calculate_api_from_percentage(percentages):
     return (total_weighted_score / len(percentages)) * 100
 
 # -------------------- HELPER FUNCTIONS --------------------
+def normalize_headers(df):
+    df.columns = df.columns.str.strip().str.lower()
+    return df
+
 def division_bucket(pct):
     if pct >= 95:
         return '>95'
@@ -120,581 +127,361 @@ def board_remark(pct):
     else:
         return 'Requires intensive board exam preparation support.'
 
-# -------------------- SINGLE SUBJECT API --------------------
-def calculate_single_subject_api(file):
-    try:
-        df = normalize_headers(pd.read_excel(file))
-        
-        # Check required columns with better error message
-        required_cols = {'name', 'marks'}
-        available_cols = set(df.columns)
-        missing_cols = required_cols - available_cols
-        
-        if missing_cols:
-            st.error(f"""
-            **❌ Missing Columns Detected**
-            
-            Your file is missing these required columns: **{', '.join(missing_cols)}**
-            
-            **Please ensure your file has exactly these columns:**
-            - **Name** (Student names)
-            - **Marks** (Scores out of 100)
-            
-            **Tip:** Use the template provided to avoid formatting issues.
-            """)
-            return
-        
-        # Validate marks range
-        if df['marks'].max() > 100 or df['marks'].min() < 0:
-            st.error("""
-            **⚠️ Invalid Marks Range**
-            
-            All marks must be between **0 and 100**.
-            
-            Please check your data and upload again.
-            """)
-            return
-        
-        # Show progress
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        status_text.text("Processing data...")
-        progress_bar.progress(20)
-        
-        df['percentage'] = df['marks']
-        df['rank'] = df['percentage'].rank(ascending=False, method='dense').astype(int)
-        
-        progress_bar.progress(40)
-        status_text.text("Categorizing students...")
-        
-        df['division'] = df['percentage'].apply(division_bucket)
-        df['performance category'] = df['percentage'].apply(performance_tag)
-        df['suggested action'] = df['performance category'].apply(remedial_suggestion)
-        df['teacher remark'] = df['performance category'].apply(teacher_remark)
-        df['subject-wise remark'] = df['percentage'].apply(weakness_remark)
-        df['board exam remark'] = df['percentage'].apply(board_remark)
-        
-        progress_bar.progress(60)
-        status_text.text("Calculating API score...")
-        
-        api_score = calculate_api_from_percentage(df['percentage'])
-        
-        progress_bar.progress(80)
-        status_text.text("Preparing reports...")
-        
-        # Clear progress indicators
-        progress_bar.progress(100)
-        status_text.text("")
-        
-        # Display Results
-        st.success("✅ Analysis Complete!")
-        
-        # API Score in a prominent box
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.markdown(f"""
-            <div style='text-align: center; padding: 20px; background-color: #f0f2f6; border-radius: 10px;'>
-                <h3 style='margin: 0; color: #1f77b4;'>🏆 Class API Score</h3>
-                <h1 style='margin: 10px 0; color: #ff4b4b; font-size: 48px;'>{api_score:.2f}</h1>
-                <p style='margin: 0; color: #666;'>Based on {len(df)} students</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Summary Statistics
-        st.subheader("📊 Summary Statistics")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Total Students", len(df))
-        with col2:
-            st.metric("Highest Score", f"{df['percentage'].max():.1f}%")
-        with col3:
-            st.metric("Average Score", f"{df['percentage'].mean():.1f}%")
-        with col4:
-            st.metric("Lowest Score", f"{df['percentage'].min():.1f}%")
-        
-        # Editable Remarks Section
-        st.subheader("✏️ Edit Teacher Remarks")
-        with st.expander("Click to edit remarks for individual students", expanded=False):
-            edited = st.data_editor(
-                df[['name', 'teacher remark']],
-                num_rows='dynamic',
-                use_container_width=True,
-                column_config={
-                    "name": st.column_config.TextColumn("Student Name", width="medium"),
-                    "teacher remark": st.column_config.TextColumn("Teacher Remark", width="large")
-                }
-            )
-            df.update(edited)
-        
-        # Distribution Tables
-        st.subheader("📈 Performance Distribution")
-        
-        tab1, tab2, tab3 = st.tabs(["By Division", "By Category", "Student Groups"])
-        
-        with tab1:
-            div_df = df['division'].value_counts().reset_index()
-            div_df.columns = ['Division', 'Count']
-            div_df = div_df.sort_values('Division')
-            st.dataframe(div_df, use_container_width=True)
-            
-            # Visualization
-            st.bar_chart(div_df.set_index('Division'))
-        
-        with tab2:
-            cat_df = df['performance category'].value_counts().reset_index()
-            cat_df.columns = ['Category', 'Count']
-            # Add emoji for better visualization
-            cat_df['Display'] = cat_df['Category'].apply(lambda x: f"{get_category_color(x)} {x}")
-            st.dataframe(cat_df[['Display', 'Count']], use_container_width=True)
-        
-        with tab3:
-            for cat in df['performance category'].unique():
-                cat_count = len(df[df['performance category'] == cat])
-                with st.expander(f"{get_category_color(cat)} {cat} ({cat_count} students)", expanded=False):
-                    st.dataframe(
-                        df[df['performance category'] == cat][['name', 'percentage', 'rank', 'teacher remark']]
-                        .sort_values('rank'),
-                        use_container_width=True
-                    )
-        
-        # Download Section
-        st.subheader("💾 Download Full Report")
-        
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, sheet_name='Student Analysis', index=False)
-            div_df.to_excel(writer, sheet_name='Division Summary', index=False)
-            cat_df[['Category', 'Count']].to_excel(writer, sheet_name='Category Summary', index=False)
-            pd.DataFrame({
-                'Metric': ['API Score', 'Total Students', 'Highest Score', 'Average Score', 'Lowest Score'],
-                'Value': [api_score, len(df), df['percentage'].max(), df['percentage'].mean(), df['percentage'].min()]
-            }).to_excel(writer, sheet_name='Summary', index=False)
-        
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.download_button(
-                label="📥 Download Excel Report",
-                data=output.getvalue(),
-                file_name='API_Single_Subject_Report.xlsx',
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                use_container_width=True
-            )
-        
-    except Exception as e:
-        st.error(f"""
-        **❌ Error Processing File**
-        
-        There was an issue with your file:
-        ```
-        {str(e)}
-        ```
-        
-        **Please check:**
-        1. File is in .xlsx format
-        2. No empty rows before the data
-        3. No merged cells
-        4. Use the template for correct format
-        """)
-
-# -------------------- FIVE SUBJECT API --------------------
-def calculate_five_subject_api(file):
-    try:
-        df = normalize_headers(pd.read_excel(file))
-        subject_cols = ['subject1', 'subject2', 'subject3', 'subject4', 'subject5']
-        
-        # Check required columns
-        required_cols = set(['name'] + subject_cols)
-        available_cols = set(df.columns)
-        missing_cols = required_cols - available_cols
-        
-        if missing_cols:
-            st.error(f"""
-            **❌ Missing Columns Detected**
-            
-            Your file is missing these required columns: **{', '.join(missing_cols)}**
-            
-            **Please ensure your file has these columns:**
-            - **Name** (Student names)
-            - **Subject1** to **Subject5** (Marks out of 100 for each subject)
-            
-            **Tip:** Use the Five Subjects template for correct format.
-            """)
-            return
-        
-        # Validate marks range
-        if df[subject_cols].max().max() > 100 or df[subject_cols].min().min() < 0:
-            st.error("""
-            **⚠️ Invalid Marks Range**
-            
-            All subject marks must be between **0 and 100**.
-            
-            Please check your data and upload again.
-            """)
-            return
-        
-        # Show progress
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        status_text.text("Processing data...")
-        progress_bar.progress(20)
-        
-        df['total'] = df[subject_cols].sum(axis=1)
-        df['percentage'] = (df['total'] / 500) * 100
-        
-        progress_bar.progress(40)
-        status_text.text("Calculating ranks and categories...")
-        
-        df['rank'] = df['percentage'].rank(ascending=False, method='dense').astype(int)
-        df['division'] = df['percentage'].apply(division_bucket)
-        df['performance category'] = df['percentage'].apply(performance_tag)
-        df['suggested action'] = df['performance category'].apply(remedial_suggestion)
-        df['teacher remark'] = df['performance category'].apply(teacher_remark)
-        df['subject-wise remark'] = df['percentage'].apply(weakness_remark)
-        df['board exam remark'] = df['percentage'].apply(board_remark)
-        
-        progress_bar.progress(60)
-        status_text.text("Calculating API score...")
-        
-        api_score = calculate_api_from_percentage(df['percentage'])
-        
-        progress_bar.progress(80)
-        status_text.text("Preparing reports...")
-        
-        # Clear progress indicators
-        progress_bar.progress(100)
-        status_text.text("")
-        
-        # Display Results
-        st.success("✅ Analysis Complete!")
-        
-        # API Score in a prominent box
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.markdown(f"""
-            <div style='text-align: center; padding: 20px; background-color: #f0f2f6; border-radius: 10px;'>
-                <h3 style='margin: 0; color: #1f77b4;'>🏆 Class API Score</h3>
-                <h1 style='margin: 10px 0; color: #ff4b4b; font-size: 48px;'>{api_score:.2f}</h1>
-                <p style='margin: 0; color: #666;'>Based on {len(df)} students across 5 subjects</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Summary Statistics
-        st.subheader("📊 Summary Statistics")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Total Students", len(df))
-        with col2:
-            st.metric("Highest Percentage", f"{df['percentage'].max():.1f}%")
-        with col3:
-            st.metric("Average Percentage", f"{df['percentage'].mean():.1f}%")
-        with col4:
-            st.metric("Lowest Percentage", f"{df['percentage'].min():.1f}%")
-        
-        # Subject-wise Averages
-        st.subheader("📚 Subject-wise Performance")
-        subject_avgs = df[subject_cols].mean().round(2)
-        subject_df = pd.DataFrame({
-            'Subject': [f'Subject {i+1}' for i in range(5)],
-            'Average Score': subject_avgs.values
-        })
-        st.dataframe(subject_df, use_container_width=True)
-        
-        # Editable Remarks Section
-        st.subheader("✏️ Edit Teacher Remarks")
-        with st.expander("Click to edit remarks for individual students", expanded=False):
-            edited = st.data_editor(
-                df[['name', 'teacher remark']],
-                num_rows='dynamic',
-                use_container_width=True,
-                column_config={
-                    "name": st.column_config.TextColumn("Student Name", width="medium"),
-                    "teacher remark": st.column_config.TextColumn("Teacher Remark", width="large")
-                }
-            )
-            df.update(edited)
-        
-        # Distribution Tables
-        st.subheader("📈 Performance Distribution")
-        
-        tab1, tab2, tab3 = st.tabs(["By Division", "By Category", "Student Groups"])
-        
-        with tab1:
-            div_df = df['division'].value_counts().reset_index()
-            div_df.columns = ['Division', 'Count']
-            div_df = div_df.sort_values('Division')
-            st.dataframe(div_df, use_container_width=True)
-            
-            # Visualization
-            st.bar_chart(div_df.set_index('Division'))
-        
-        with tab2:
-            cat_df = df['performance category'].value_counts().reset_index()
-            cat_df.columns = ['Category', 'Count']
-            # Add emoji for better visualization
-            cat_df['Display'] = cat_df['Category'].apply(lambda x: f"{get_category_color(x)} {x}")
-            st.dataframe(cat_df[['Display', 'Count']], use_container_width=True)
-        
-        with tab3:
-            for cat in df['performance category'].unique():
-                cat_count = len(df[df['performance category'] == cat])
-                with st.expander(f"{get_category_color(cat)} {cat} ({cat_count} students)", expanded=False):
-                    st.dataframe(
-                        df[df['performance category'] == cat][['name', 'percentage', 'total', 'rank', 'teacher remark']]
-                        .sort_values('rank'),
-                        use_container_width=True
-                    )
-        
-        # Top Performers
-        st.subheader("🏅 Top 10 Performers")
-        top_10 = df.nlargest(10, 'percentage')[['name', 'total', 'percentage', 'rank']]
-        st.dataframe(top_10, use_container_width=True)
-        
-        # Download Section
-        st.subheader("💾 Download Full Report")
-        
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, sheet_name='Student Analysis', index=False)
-            div_df.to_excel(writer, sheet_name='Division Summary', index=False)
-            cat_df[['Category', 'Count']].to_excel(writer, sheet_name='Category Summary', index=False)
-            subject_df.to_excel(writer, sheet_name='Subject Averages', index=False)
-            pd.DataFrame({
-                'Metric': ['API Score', 'Total Students', 'Highest %', 'Average %', 'Lowest %'],
-                'Value': [api_score, len(df), df['percentage'].max(), df['percentage'].mean(), df['percentage'].min()]
-            }).to_excel(writer, sheet_name='Summary', index=False)
-        
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.download_button(
-                label="📥 Download Excel Report",
-                data=output.getvalue(),
-                file_name='API_Five_Subjects_Report.xlsx',
-                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                use_container_width=True
-            )
-        
-    except Exception as e:
-        st.error(f"""
-        **❌ Error Processing File**
-        
-        There was an issue with your file:
-        ```
-        {str(e)}
-        ```
-        
-        **Please check:**
-        1. File is in .xlsx format
-        2. All 5 subject columns are present
-        3. No empty rows before the data
-        4. No merged cells
-        5. Use the template for correct format
-        """)
-
 # -------------------- SIDEBAR --------------------
 with st.sidebar:
     st.markdown("""
     <div style='text-align: center;'>
-        <h1>📊</h1>
-        <h2>Teacher's API Calculator</h2>
+        <h1 style='font-size: 48px;'>📊</h1>
+        <h2>API Calculator</h2>
+        <p style='color: #666; font-size: 14px;'>For Teachers</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("---")
     
-    st.subheader("📋 Choose Analysis Type")
+    # Initialize session state for option if not exists
+    if 'analysis_option' not in st.session_state:
+        st.session_state.analysis_option = 'Single Subject API'
+    
     option = st.radio(
-        "",
+        "**📋 Choose Analysis Type**",
         ('Single Subject API', 'Five Subject API'),
+        key='analysis_option',
         help="Select based on your data format"
     )
     
     st.markdown("---")
     
-    st.subheader("ℹ️ How to Use")
-    with st.expander("Step-by-Step Guide", expanded=True):
-        st.markdown(f"""
-        **For {option}:**
-        
-        1. **📥 Download** the {option.split()[0].lower()} template
-        2. **✏️ Fill** with student marks (0-100)
-        3. **📤 Upload** your filled file
-        4. **📊 View** results and analysis
-        5. **💾 Download** detailed report
-        
-        **Note:** 
-        - Use the template for correct format
-        - Save your file as .xlsx
-        - Don't rename or delete columns
-        """)
+    with st.expander("**ℹ️ Quick Guide**", expanded=True):
+        if option == 'Single Subject API':
+            st.markdown("""
+            1. **Download** single subject template
+            2. **Fill** names and marks (0-100)
+            3. **Upload** your file
+            4. **Get** API score and analysis
+            
+            **Columns needed:**
+            - Name
+            - Marks
+            """)
+        else:
+            st.markdown("""
+            1. **Download** five subjects template
+            2. **Fill** 5 subject marks (0-100 each)
+            3. **Upload** your file
+            4. **Get** total, percentage, and API
+            
+            **Columns needed:**
+            - Name
+            - Subject1 to Subject5
+            """)
     
     st.markdown("---")
-    
-    st.subheader("📞 Need Help?")
-    st.markdown("""
-    **Common Issues:**
-    - File not uploading? → Check .xlsx format
-    - Error message? → Use the template
-    - Wrong results? → Verify marks are 0-100
-    
-    **Tips:**
-    - Download template first
-    - Don't edit column names
-    - Save before uploading
-    """)
-    
-    st.markdown("---")
-    st.caption("Made for Teachers • Easy Grade Analysis")
+    st.caption("💡 **Tip:** Always use the template for best results")
 
-# -------------------- MAIN CONTENT --------------------
-st.title(f"🎯 {option}")
+# -------------------- TEMPLATE DOWNLOAD SECTION --------------------
+st.title(f"📚 {option}")
 
-# Templates Section
-st.header("1. 📥 Get Your Template")
+# Templates in columns
+st.header("1. Get Your Template")
 
 if option == 'Single Subject API':
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.subheader("📝 Template Format")
-        example_df = pd.DataFrame({
-            'Name': ['John Doe', 'Jane Smith', 'Robert Johnson', 'Emily Davis'],
-            'Marks': [85, 92, 78, 65]
-        })
-        st.dataframe(example_df, use_container_width=True)
-        st.caption("**Note:** Marks should be out of 100")
+        st.subheader("Template Format")
+        st.markdown("""
+        Your Excel file should look like this:
+        
+        | Name | Marks |
+        |------|-------|
+        | Student 1 | 85 |
+        | Student 2 | 92 |
+        | Student 3 | 78 |
+        """)
+        
+        # Simple example table
+        example_data = {
+            'Name': ['Rahul Sharma', 'Priya Patel', 'Amit Kumar'],
+            'Marks': [85, 92, 78]
+        }
+        st.dataframe(pd.DataFrame(example_data), use_container_width=True, hide_index=True)
     
     with col2:
-        st.subheader("⬇️ Download Template")
-        single_template = pd.DataFrame({'Name': [''], 'Marks': ['']})
-        buf1 = BytesIO()
-        with pd.ExcelWriter(buf1, engine='xlsxwriter') as writer:
-            single_template.to_excel(writer, index=False, sheet_name='Template')
+        st.subheader("Download")
+        # Create template on demand
+        if st.button("📥 Download Single Subject Template", use_container_width=True):
+            single_template = pd.DataFrame({'Name': [''], 'Marks': ['']})
+            buf = BytesIO()
+            with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+                single_template.to_excel(writer, index=False)
+            st.download_button(
+                label="Click to Save Template",
+                data=buf.getvalue(),
+                file_name='Single_Subject_Template.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                key="single_template_dl"
+            )
         
-        st.download_button(
-            label="📥 Download Single Subject Template",
-            data=buf1.getvalue(),
-            file_name='Single_Subject_Template.xlsx',
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            use_container_width=True
-        )
-        
-        st.info("💡 **Tip:** Fill this template with your student data, then upload below.")
+        st.info("**Tip:** Marks should be between 0-100")
         
 else:  # Five Subject API
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.subheader("📝 Template Format")
-        example_df = pd.DataFrame({
-            'Name': ['John Doe', 'Jane Smith'],
+        st.subheader("Template Format")
+        st.markdown("""
+        Your Excel file should look like this:
+        
+        | Name | Sub1 | Sub2 | Sub3 | Sub4 | Sub5 |
+        |------|------|------|------|------|------|
+        | Student 1 | 85 | 78 | 92 | 67 | 89 |
+        """)
+        
+        # Simple example table
+        example_data = {
+            'Name': ['Rahul Sharma', 'Priya Patel'],
             'Subject1': [85, 92],
             'Subject2': [78, 88],
             'Subject3': [92, 85],
             'Subject4': [67, 90],
             'Subject5': [89, 94]
-        })
-        st.dataframe(example_df, use_container_width=True)
-        st.caption("**Note:** All marks should be out of 100 (5 subjects)")
+        }
+        st.dataframe(pd.DataFrame(example_data), use_container_width=True, hide_index=True)
     
     with col2:
-        st.subheader("⬇️ Download Template")
-        five_template = pd.DataFrame({
-            'Name': [''],
-            'Subject1': [''],
-            'Subject2': [''],
-            'Subject3': [''],
-            'Subject4': [''],
-            'Subject5': ['']
-        })
-        buf2 = BytesIO()
-        with pd.ExcelWriter(buf2, engine='xlsxwriter') as writer:
-            five_template.to_excel(writer, index=False, sheet_name='Template')
+        st.subheader("Download")
+        # Create template on demand
+        if st.button("📥 Download Five Subjects Template", use_container_width=True):
+            five_template = pd.DataFrame({
+                'Name': [''],
+                'Subject1': [''],
+                'Subject2': [''],
+                'Subject3': [''],
+                'Subject4': [''],
+                'Subject5': ['']
+            })
+            buf = BytesIO()
+            with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+                five_template.to_excel(writer, index=False)
+            st.download_button(
+                label="Click to Save Template",
+                data=buf.getvalue(),
+                file_name='Five_Subjects_Template.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                key="five_template_dl"
+            )
         
-        st.download_button(
-            label="📥 Download Five Subjects Template",
-            data=buf2.getvalue(),
-            file_name='Five_Subjects_Template.xlsx',
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            use_container_width=True
-        )
-        
-        st.info("💡 **Tip:** Total and percentage will be automatically calculated.")
+        st.info("**Tip:** All marks 0-100")
 
-st.header("2. 📤 Upload Your Filled File")
+# -------------------- UPLOAD SECTION --------------------
+st.header("2. Upload Your File")
 
 uploaded_file = st.file_uploader(
-    f"Choose your {option} Excel file",
-    type=['xlsx'],
-    help="Upload the filled template file (.xlsx format only)"
+    f"Upload your {option.split()[0].lower()} marks file",
+    type=['xlsx', 'xls'],
+    help="Only Excel files (.xlsx, .xls) are supported"
 )
 
 if uploaded_file:
-    st.success(f"✅ File uploaded successfully: **{uploaded_file.name}**")
+    # Store file in session state to prevent re-uploads
+    if 'uploaded_file' not in st.session_state or st.session_state.uploaded_file != uploaded_file.name:
+        st.session_state.uploaded_file = uploaded_file.name
+        st.session_state.processed = False
     
-    # Show file info
-    file_details = {
-        "Filename": uploaded_file.name,
-        "File size": f"{uploaded_file.size / 1024:.1f} KB"
-    }
+    st.success(f"✅ **File uploaded:** {uploaded_file.name}")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.info(f"📄 **File:** {file_details['Filename']}")
-    with col2:
-        st.info(f"📏 **Size:** {file_details['File size']}")
+    # Process button to control when analysis runs
+    if st.button("🚀 Process File", type="primary", use_container_width=True):
+        with st.spinner("Processing your data..."):
+            # Small delay for better UX
+            time.sleep(0.5)
+            
+            try:
+                # Load and process data
+                df = load_excel_data(uploaded_file)
+                df = normalize_headers(df)
+                
+                if option == 'Single Subject API':
+                    # Validate single subject
+                    if not {'name', 'marks'}.issubset(df.columns):
+                        st.error("❌ **Missing columns!** File must have 'Name' and 'Marks' columns.")
+                        st.stop()
+                    
+                    if df['marks'].max() > 100 or df['marks'].min() < 0:
+                        st.error("❌ **Invalid marks!** All marks must be between 0 and 100.")
+                        st.stop()
+                    
+                    # Calculate
+                    df['percentage'] = df['marks']
+                    df['rank'] = df['percentage'].rank(ascending=False, method='dense').astype(int)
+                    df['division'] = df['percentage'].apply(division_bucket)
+                    df['performance category'] = df['percentage'].apply(performance_tag)
+                    
+                else:  # Five Subject API
+                    subject_cols = ['subject1', 'subject2', 'subject3', 'subject4', 'subject5']
+                    required_cols = ['name'] + subject_cols
+                    
+                    missing = [col for col in required_cols if col not in df.columns]
+                    if missing:
+                        st.error(f"❌ **Missing columns:** {', '.join(missing)}")
+                        st.stop()
+                    
+                    if df[subject_cols].max().max() > 100 or df[subject_cols].min().min() < 0:
+                        st.error("❌ **Invalid marks!** All subject marks must be between 0 and 100.")
+                        st.stop()
+                    
+                    # Calculate
+                    df['total'] = df[subject_cols].sum(axis=1)
+                    df['percentage'] = (df['total'] / 500) * 100
+                    df['rank'] = df['percentage'].rank(ascending=False, method='dense').astype(int)
+                    df['division'] = df['percentage'].apply(division_bucket)
+                    df['performance category'] = df['percentage'].apply(performance_tag)
+                
+                # Common calculations
+                df['suggested action'] = df['performance category'].apply(remedial_suggestion)
+                df['teacher remark'] = df['performance category'].apply(teacher_remark)
+                df['subject-wise remark'] = df['percentage'].apply(weakness_remark)
+                df['board exam remark'] = df['percentage'].apply(board_remark)
+                
+                # Calculate API
+                api_score = calculate_api_cached(df['percentage'])
+                
+                # Store results in session state
+                st.session_state.df = df
+                st.session_state.api_score = api_score
+                st.session_state.processed = True
+                
+            except Exception as e:
+                st.error(f"❌ **Error processing file:** {str(e)}")
+                st.stop()
     
-    st.header("3. 📊 View Results")
-    
-    # Process the file
-    if option == 'Single Subject API':
-        calculate_single_subject_api(uploaded_file)
-    else:
-        calculate_five_subject_api(uploaded_file)
-else:
-    st.info("👆 **Please upload your Excel file to see the analysis results.**")
-    
-    # Show what happens next
-    st.markdown("---")
-    st.subheader("🎬 What Happens Next?")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("""
-        <div style='text-align: center; padding: 15px; background-color: #e6f3ff; border-radius: 10px;'>
-            <h3>1️⃣</h3>
-            <p><b>Upload File</b></p>
-            <small>Your data is processed securely</small>
+    # Display results if processed
+    if 'processed' in st.session_state and st.session_state.processed:
+        df = st.session_state.df
+        api_score = st.session_state.api_score
+        
+        st.header("3. Analysis Results")
+        
+        # API Score in nice display
+        st.markdown(f"""
+        <div style='text-align: center; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;'>
+            <h3 style='margin: 0;'>Class API Score</h3>
+            <h1 style='margin: 10px 0; font-size: 48px;'>{api_score:.2f}</h1>
+            <p style='margin: 0; opacity: 0.9;'>Based on {len(df)} students</p>
         </div>
         """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div style='text-align: center; padding: 15px; background-color: #e6f3ff; border-radius: 10px;'>
-            <h3>2️⃣</h3>
-            <p><b>Instant Analysis</b></p>
-            <small>API score, ranks, categories</small>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown("""
-        <div style='text-align: center; padding: 15px; background-color: #e6f3ff; border-radius: 10px;'>
-            <h3>3️⃣</h3>
-            <p><b>Download Report</b></p>
-            <small>Complete Excel with all details</small>
-        </div>
-        """, unsafe_allow_html=True)
+        
+        # Quick stats
+        st.subheader("📊 Quick Statistics")
+        cols = st.columns(4)
+        metrics = [
+            ("Total Students", len(df)),
+            ("Highest Score", f"{df['percentage'].max():.1f}%"),
+            ("Average Score", f"{df['percentage'].mean():.1f}%"),
+            ("Lowest Score", f"{df['percentage'].min():.1f}%")
+        ]
+        
+        for col, (label, value) in zip(cols, metrics):
+            col.metric(label, value)
+        
+        # Performance distribution
+        st.subheader("📈 Performance Distribution")
+        
+        tab1, tab2, tab3 = st.tabs(["Categories", "Divisions", "Students"])
+        
+        with tab1:
+            cat_counts = df['performance category'].value_counts().reset_index()
+            cat_counts.columns = ['Category', 'Count']
+            for _, row in cat_counts.iterrows():
+                color = get_category_color(row['Category'])
+                st.write(f"{color} **{row['Category']}**: {row['Count']} students")
+        
+        with tab2:
+            div_counts = df['division'].value_counts().reset_index()
+            div_counts.columns = ['Division', 'Count']
+            st.dataframe(div_counts, use_container_width=True, hide_index=True)
+        
+        with tab3:
+            # Simple student list
+            display_cols = ['name', 'percentage', 'rank', 'performance category']
+            st.dataframe(df[display_cols].sort_values('rank'), 
+                        use_container_width=True, 
+                        hide_index=True,
+                        column_config={
+                            "name": "Student Name",
+                            "percentage": "Score %",
+                            "rank": "Rank",
+                            "performance category": "Category"
+                        })
+        
+        # Editable remarks
+        st.subheader("✏️ Edit Teacher Remarks")
+        with st.expander("Click to edit", expanded=False):
+            edited_df = st.data_editor(
+                df[['name', 'teacher remark']],
+                num_rows="dynamic",
+                use_container_width=True,
+                column_config={
+                    "name": st.column_config.TextColumn("Student", width="medium"),
+                    "teacher remark": st.column_config.TextColumn("Remark", width="large")
+                }
+            )
+            # Update only if changed
+            if not edited_df.equals(df[['name', 'teacher remark']]):
+                df['teacher remark'] = edited_df['teacher remark']
+                st.success("Remarks updated!")
+        
+        # Download section
+        st.subheader("💾 Download Report")
+        
+        # Prepare download data
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Student Analysis', index=False)
+            
+            # Summary sheets
+            cat_summary = df['performance category'].value_counts().reset_index()
+            cat_summary.columns = ['Category', 'Count']
+            cat_summary.to_excel(writer, sheet_name='Categories', index=False)
+            
+            div_summary = df['division'].value_counts().reset_index()
+            div_summary.columns = ['Division', 'Count']
+            div_summary.to_excel(writer, sheet_name='Divisions', index=False)
+            
+            # API score sheet
+            summary_df = pd.DataFrame({
+                'Metric': ['API Score', 'Total Students', 'Highest %', 'Average %', 'Lowest %'],
+                'Value': [api_score, len(df), df['percentage'].max(), df['percentage'].mean(), df['percentage'].min()]
+            })
+            summary_df.to_excel(writer, sheet_name='Summary', index=False)
+        
+        # Download button
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.download_button(
+                label="📥 Download Full Report (Excel)",
+                data=output.getvalue(),
+                file_name=f'API_Report_{time.strftime("%Y%m%d_%H%M%S")}.xlsx',
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                use_container_width=True,
+                type="primary"
+            )
+        
+        st.info("💡 **Tip:** The downloaded file contains all analysis in separate sheets.")
 
-# Footer
+# -------------------- FOOTER --------------------
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px;'>
-    <p>📚 <b>Teacher's API Calculator</b> • Simplify Your Grade Analysis</p>
-    <small>All processing happens in your browser. Your data is never stored on our servers.</small>
+    <p><b>Teacher's API Calculator</b> • Simplify Your Grade Analysis</p>
+    <small>All processing happens in your browser. Your data is never stored.</small>
 </div>
 """, unsafe_allow_html=True)
+
+# -------------------- INITIAL LOADING MESSAGE --------------------
+if 'initial_load' not in st.session_state:
+    st.session_state.initial_load = True
+    # Show a simple welcome message on first load
+    st.balloons()
+    st.success("App loaded successfully! Choose your analysis type from the sidebar.")
